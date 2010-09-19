@@ -173,7 +173,8 @@ struct name_path {
 	const char *elem;
 };
 
-char *path_name(const struct name_path *path, const char *name);
+char *path_name_impl(const struct name_path *path, const char *name, int isdir);
+#define path_name(path, name) path_name_impl(path, name, 0)
 
 extern void add_object(struct object *obj,
 		       struct object_array *p,

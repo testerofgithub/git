@@ -16,7 +16,7 @@
 
 volatile show_early_output_fn_t show_early_output;
 
-char *path_name(const struct name_path *path, const char *name)
+char *path_name_impl(const struct name_path *path, const char *name, int isdir)
 {
 	const struct name_path *p;
 	char *n, *m;
@@ -27,7 +27,7 @@ char *path_name(const struct name_path *path, const char *name)
 		if (p->elem_len)
 			len += p->elem_len + 1;
 	}
-	n = xmalloc(len);
+	n = xmalloc(len + !!isdir);
 	m = n + len - (nlen + 1);
 	strcpy(m, name);
 	for (p = path; p; p = p->up) {
@@ -36,6 +36,10 @@ char *path_name(const struct name_path *path, const char *name)
 			memcpy(m, p->elem, p->elem_len);
 			m[p->elem_len] = '/';
 		}
+	}
+	if (isdir && len > 1) {
+		n[len-1] = '/';
+		n[len] = '\0';
 	}
 	return n;
 }
