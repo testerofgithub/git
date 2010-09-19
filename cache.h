@@ -497,6 +497,7 @@ struct pathspec {
 	const char **raw; /* get_pathspec() result, not freed by free_pathspec() */
 	int nr;
 	int has_wildcard:1;
+	int tree_recursive_diff:1;
 	struct pathspec_item {
 		int len;
 		int has_wildcard:1;
