@@ -2,6 +2,7 @@
 #include "tree-walk.h"
 #include "unpack-trees.h"
 #include "tree.h"
+#include "dir.h"
 
 static const char *get_mode(const char *str, unsigned int *modep)
 {
@@ -477,6 +478,23 @@ int tree_entry_interesting(const struct name_entry *entry,
 		return 1;
 
 	pathlen = tree_entry_len(entry->path, entry->sha1);
+
+	if (ps->has_wildcard) {
+		static char full_path[PATH_MAX];
+
+		/*
+		 * If it's recursive diff, directories are
+		 * intermediate step before ending up to a file.
+		 * Let it pass and we can match the files within
+		 * later.
+		 */
+		if (ps->tree_recursive_diff && S_ISDIR(entry->mode))
+			return 1;
+
+		memcpy(full_path, base, baselen);
+		memcpy(full_path+baselen, entry->path, pathlen+1);
+		return match_pathspec(ps->raw, full_path, baselen+pathlen, 0, NULL) > 0;
+	}
 
 	for (i = 0; i < ps->nr; i++) {
 		const char *match = ps->raw[i];
