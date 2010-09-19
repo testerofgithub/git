@@ -496,8 +496,10 @@ extern int ie_modified(const struct index_state *, struct cache_entry *, struct 
 struct pathspec {
 	const char **raw; /* get_pathspec() result, not freed by free_pathspec() */
 	int nr;
+	int has_wildcard:1;
 	struct pathspec_item {
 		int len;
+		int has_wildcard:1;
 	} *items;
 };
 

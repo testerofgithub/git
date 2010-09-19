@@ -1091,6 +1091,9 @@ int init_pathspec(struct pathspec *pathspec, const char **paths)
 		struct pathspec_item *item = pathspec->items+i;
 
 		item->len = strlen(paths[i]);
+		item->has_wildcard = !no_wildcard(paths[i]);
+		if (item->has_wildcard)
+			pathspec->has_wildcard = 1;
 	}
 	return 0;
 }
