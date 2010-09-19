@@ -55,6 +55,15 @@ test_expect_success \
     'git diff-index --cached $tree -- file0 >current &&
      compare_diff_raw current expected'
 
+cat >expected.template <<\EOF
+:100644 100644 766498d93a4b06057a8e49d23f4068f1170ff38f 0a41e115ab61be0328a19b29f18cdcb49338d516 M	path1/file1
+EOF
+test_expect_success 'diff-index with wildcard' '
+	git diff-index --cached $tree -- "*1" >current &&
+	cp expected.template expected &&
+	compare_diff_raw current expected
+'
+
 cat >expected <<\EOF
 EOF
 test_expect_success \

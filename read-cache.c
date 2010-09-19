@@ -685,30 +685,7 @@ int ce_same_name(struct cache_entry *a, struct cache_entry *b)
 
 int ce_path_match(const struct cache_entry *ce, const struct pathspec *pathspec)
 {
-	const char *match, *name;
-	const char **p;
-	int len;
-
-	if (!pathspec || !pathspec->nr)
-		return 1;
-
-	len = ce_namelen(ce);
-	name = ce->name;
-	p = pathspec->raw;
-	while ((match = *p++) != NULL) {
-		int matchlen = strlen(match);
-		if (matchlen > len)
-			continue;
-		if (memcmp(name, match, matchlen))
-			continue;
-		if (matchlen && name[matchlen-1] == '/')
-			return 1;
-		if (name[matchlen] == '/' || !name[matchlen])
-			return 1;
-		if (!matchlen)
-			return 1;
-	}
-	return 0;
+	return match_pathspec(pathspec->raw, ce->name, ce_namelen(ce), 0, NULL) > 0;
 }
 
 /*
