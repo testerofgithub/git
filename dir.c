@@ -1074,6 +1074,7 @@ int remove_path(const char *name)
 int init_pathspec(struct pathspec *pathspec, const char **paths)
 {
 	const char **p = paths;
+	int i;
 
 	memset(pathspec, 0, sizeof(*pathspec));
 	if (!p)
@@ -1082,10 +1083,20 @@ int init_pathspec(struct pathspec *pathspec, const char **paths)
 		p++;
 	pathspec->raw = paths;
 	pathspec->nr = p - paths;
+	if (!pathspec->nr)
+		return 0;
+
+	pathspec->items = xmalloc(sizeof(struct pathspec_item)*pathspec->nr);
+	for (i = 0; i < pathspec->nr; i++) {
+		struct pathspec_item *item = pathspec->items+i;
+
+		item->len = strlen(paths[i]);
+	}
 	return 0;
 }
 
 void free_pathspec(struct pathspec *pathspec)
 {
-	; /* do nothing */
+	free(pathspec->items);
+	pathspec->items = NULL;
 }
