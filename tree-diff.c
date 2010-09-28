@@ -91,25 +91,20 @@ static int compare_tree_entry(struct tree_desc *t1, struct tree_desc *t2, const 
  *  - zero for no
  *  - negative for "no, and no subsequent entries will be either"
  */
-static int tree_entry_interesting(struct tree_desc *desc, const char *base, int baselen, struct diff_options *opt)
+static int tree_entry_interesting(const struct name_entry *entry, const char *base, int baselen, const struct pathspec *ps)
 {
-	const char *path;
-	const unsigned char *sha1;
-	unsigned mode;
 	int i;
 	int pathlen;
 	int never_interesting = -1;
 
-	if (!opt->pathspec.nr)
+	if (!ps || !ps->nr)
 		return 1;
 
-	sha1 = tree_entry_extract(desc, &path, &mode);
+	pathlen = tree_entry_len(entry->path, entry->sha1);
 
-	pathlen = tree_entry_len(path, sha1);
-
-	for (i = 0; i < opt->pathspec.nr; i++) {
-		const char *match = opt->pathspec.raw[i];
-		int matchlen = opt->pathspec.items[i].len;
+	for (i = 0; i < ps->nr; i++) {
+		const char *match = ps->raw[i];
+		int matchlen = ps->items[i].len;
 		int m = -1; /* signals that we haven't called strncmp() */
 
 		if (baselen >= matchlen) {
@@ -147,7 +142,7 @@ static int tree_entry_interesting(struct tree_desc *desc, const char *base, int 
 			 * Does match sort strictly earlier than path
 			 * with their common parts?
 			 */
-			m = strncmp(match, path,
+			m = strncmp(match, entry->path,
 				    (matchlen < pathlen) ? matchlen : pathlen);
 			if (m < 0)
 				continue;
@@ -174,7 +169,7 @@ static int tree_entry_interesting(struct tree_desc *desc, const char *base, int 
 		if (matchlen > pathlen) {
 			if (match[pathlen] != '/')
 				continue;
-			if (!S_ISDIR(mode))
+			if (!S_ISDIR(entry->mode))
 				continue;
 		}
 
@@ -183,7 +178,7 @@ static int tree_entry_interesting(struct tree_desc *desc, const char *base, int 
 			 * we cheated and did not do strncmp(), so we do
 			 * that here.
 			 */
-			m = strncmp(match, path, pathlen);
+			m = strncmp(match, entry->path, pathlen);
 
 		/*
 		 * If common part matched earlier then it is a hit,
@@ -206,8 +201,7 @@ static void show_tree(struct diff_options *opt, const char *prefix, struct tree_
 		if (all_interesting)
 			show = 1;
 		else {
-			show = tree_entry_interesting(desc, base, baselen,
-						      opt);
+			show = tree_entry_interesting(&desc->entry, base, baselen, &opt->pathspec);
 			if (show == 2)
 				all_interesting = 1;
 		}
@@ -266,7 +260,7 @@ static void skip_uninteresting(struct tree_desc *t, const char *base, int basele
 		if (all_interesting)
 			show = 1;
 		else {
-			show = tree_entry_interesting(t, base, baselen, opt);
+			show = tree_entry_interesting(&t->entry, base, baselen, &opt->pathspec);
 			if (show == 2)
 				all_interesting = 1;
 		}
