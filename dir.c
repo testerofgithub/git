@@ -1071,3 +1071,21 @@ int remove_path(const char *name)
 	return 0;
 }
 
+int init_pathspec(struct pathspec *pathspec, const char **paths)
+{
+	const char **p = paths;
+
+	memset(pathspec, 0, sizeof(*pathspec));
+	if (!p)
+		return 0;
+	while (*p)
+		p++;
+	pathspec->raw = paths;
+	pathspec->nr = p - paths;
+	return 0;
+}
+
+void free_pathspec(struct pathspec *pathspec)
+{
+	; /* do nothing */
+}
