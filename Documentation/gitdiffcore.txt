@@ -181,7 +181,7 @@ additional pass on top of the results of per-file rename detection.
 They are reported with NULL SHA1 id, in addition to the file renames:
 
 ------------------------------------------------
-:040000 040000 0000000... 0000000... R100 foo/ bar/
+:040000 040000 0000000... 0000000... R100 foo/* bar/
 :100644 100644 0123456... 1234567... R090 foo/file0 bar/file3
 :100644 100644 2345678... 2345678... R100 foo/file1 bar/file1
 :100644 100644 3456789... 3456789... R100 foo/file2 bar/file2
