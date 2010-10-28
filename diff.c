@@ -2659,6 +2659,7 @@ static void run_diff_cmd(const char *pgm,
 	const char *xfrm_msg = NULL;
 	int complete_rewrite = (p->status == DIFF_STATUS_MODIFIED) && p->score;
 	int must_show_header = 0;
+	int use_color;
 
 	if (!DIFF_OPT_TST(o, ALLOW_EXTERNAL))
 		pgm = NULL;
@@ -2668,14 +2669,36 @@ static void run_diff_cmd(const char *pgm,
 			pgm = drv->external;
 	}
 
+	/*
+	 * don't use colors when the header is intended for an
+	 * external diff driver
+	 */
+	use_color = DIFF_OPT_TST(o, COLOR_DIFF) && !pgm;
+
+	if (p->is_bulkmove) {
+		const char *set = diff_get_color(use_color, DIFF_METAINFO);
+		const char *reset = diff_get_color(use_color, DIFF_RESET);
+		struct strbuf *msgbuf;
+		char *line_prefix = "";
+
+		if (o->output_prefix) {
+			msgbuf = o->output_prefix(o, o->output_prefix_data);
+			line_prefix = msgbuf->buf;
+		}
+		fprintf(o->file, "%s%sdiff --git-detect-bulk-moves %s %s%s\n",
+			line_prefix, set, one->path, two->path, reset);
+		fprintf(o->file, "%s%sbulk move with similarity index %d%%%s\n",
+			line_prefix, set, similarity_index(p), reset);
+		fprintf(o->file, "%s%sbulk move from %s%s\n",
+			line_prefix, set, one->path, reset);
+		fprintf(o->file, "%s%sbulk move to %s%s\n",
+			line_prefix, set, two->path, reset);
+		return;
+	}
+
 	if (msg) {
-		/*
-		 * don't use colors when the header is intended for an
-		 * external diff driver
-		 */
 		fill_metainfo(msg, name, other, one, two, o, p,
-			      &must_show_header,
-			      DIFF_OPT_TST(o, COLOR_DIFF) && !pgm);
+			      &must_show_header, use_color);
 		xfrm_msg = msg->len ? msg->buf : NULL;
 	}
 
@@ -2748,8 +2771,10 @@ static void run_diff(struct diff_filepair *p, struct diff_options *o)
 		return;
 	}
 
-	diff_fill_sha1_info(one);
-	diff_fill_sha1_info(two);
+	if (!p->is_bulkmove) {
+		diff_fill_sha1_info(one);
+		diff_fill_sha1_info(two);
+	}
 
 	if (!pgm &&
 	    DIFF_FILE_VALID(one) && DIFF_FILE_VALID(two) &&
@@ -3529,9 +3554,10 @@ static void diff_flush_patch(struct diff_filepair *p, struct diff_options *o)
 	if (diff_unmodified_pair(p))
 		return;
 
-	if ((DIFF_FILE_VALID(p->one) && S_ISDIR(p->one->mode)) ||
-	    (DIFF_FILE_VALID(p->two) && S_ISDIR(p->two->mode)))
-		return; /* no tree diffs in patch format */
+	if (!p->is_bulkmove &&
+	    ((DIFF_FILE_VALID(p->one) && S_ISDIR(p->one->mode)) ||
+	     (DIFF_FILE_VALID(p->two) && S_ISDIR(p->two->mode))))
+		return; /* no tree diffs in patch format, except for bulk moves */
 
 	run_diff(p, o);
 }
