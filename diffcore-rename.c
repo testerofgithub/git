@@ -519,6 +519,34 @@ static struct diff_bulk_rename *locate_bulkmove_candidate(const char *one_path,
 }
 
 /*
+ * Marks as such file_rename if it is made uninteresting by dir_rename.
+ * Returns -1 if the file_rename is outside of the range in which given
+ * renames concerned by dir_rename are to be found (ie. end of loop),
+ * 0 otherwise.
+ */
+static int maybe_mark_uninteresting(struct diff_rename_dst *file_rename,
+				    struct diff_bulk_rename *dir_rename,
+				    int one_len, int two_len)
+{
+	if (!file_rename->pair) /* file add */
+		return 0;
+	if (strncmp(file_rename->two->path,
+		    dir_rename->two->path, two_len))
+		return -1;
+	if (strncmp(file_rename->pair->one->path,
+		    dir_rename->one->path, one_len) ||
+	    !basename_same(file_rename->pair->one, file_rename->two) ||
+	    file_rename->pair->score != MAX_SCORE)
+		return 0;
+
+	file_rename->pair->uninteresting_rename = 1;
+	debug_bulkmove(("%s* -> %s* makes %s -> %s uninteresting\n",
+			dir_rename->one->path, dir_rename->two->path,
+			file_rename->pair->one->path, file_rename->two->path));
+	return 0;
+}
+
+/*
  * Copy dirname of src into dst, suitable to append a filename without
  * an additional "/".
  * Only handles relative paths since there is no absolute path in a git repo.
@@ -721,11 +749,44 @@ static void check_one_bulk_move(struct diff_filepair *dstpair)
  * Take all file renames recorded so far and check if they could cause
  * a bulk move to be detected.
  */
-static void diffcore_bulk_moves(void)
+static void diffcore_bulk_moves(int opt_hide_renames)
 {
 	int i;
 	for (i = 0; i < rename_dst_nr; i++)
 		check_one_bulk_move(rename_dst[i].pair);
+
+	if (opt_hide_renames) {
+		/* flag as "uninteresting" those candidates hidden by dir move */
+		struct diff_bulk_rename *candidate;
+		for (candidate = bulkmove_candidates;
+		     candidate < bulkmove_candidates + bulkmove_candidates_nr;
+		     candidate++) {
+			int two_idx, i, one_len, two_len;
+			struct diff_rename_dst *two_sample;
+			if (candidate->discarded)
+				continue;
+
+			/* bisect to any entry within candidate dst dir */
+			two_sample = locate_rename_dst_dir(candidate->two->path);
+			if (!two_sample) {
+				die("PANIC: %s candidate of rename not in target tree (from %s)\n",
+				    candidate->two->path, candidate->one->path);
+			}
+			two_idx = two_sample - rename_dst;
+
+			/* now remove extraneous 100% files inside. */
+			one_len = strlen(candidate->one->path);
+			two_len = strlen(candidate->two->path);
+			for (i = two_idx; i < rename_dst_nr; i++)
+				if (maybe_mark_uninteresting(rename_dst+i, candidate,
+							     one_len, two_len) < 0)
+					break;
+			for (i = two_idx-1; i >= 0; i--)
+				if (maybe_mark_uninteresting(rename_dst+i, candidate,
+							     one_len, two_len) < 0)
+					break;
+		}
+	}
 }
 
 void diffcore_rename(struct diff_options *options)
@@ -897,7 +958,7 @@ void diffcore_rename(struct diff_options *options)
 
 	/* Now possibly factorize those renames and copies. */
 	if (DIFF_OPT_TST(options, DETECT_BULK_MOVES))
-		diffcore_bulk_moves();
+		diffcore_bulk_moves(DIFF_OPT_TST(options, HIDE_DIR_RENAME_DETAILS));
 
 	DIFF_QUEUE_CLEAR(&outq);
 
@@ -932,7 +993,8 @@ void diffcore_rename(struct diff_options *options)
 			struct diff_rename_dst *dst =
 				locate_rename_dst(p->two, 0);
 			if (dst && dst->pair) {
-				diff_q(&outq, dst->pair);
+				if (!dst->pair->uninteresting_rename)
+					diff_q(&outq, dst->pair);
 				pair_to_free = p;
 			}
 			else

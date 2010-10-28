@@ -247,6 +247,11 @@ endif::git-log[]
 	Detect bulk move of all files of a directory into a
 	different one.
 
+--hide-bulk-move-details::
+	Hide the individual files moves that make up a bulk move,
+	without hinding other changes to the involved files (contents
+	change, name change relative to the bulk move's destination).
+
 -C[<n>]::
 	Detect copies as well as renames.  See also `--find-copies-harder`.
 	If `n` is specified, it has the same meaning as for `-M<n>`.
