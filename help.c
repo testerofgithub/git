@@ -3,6 +3,7 @@
 #include "exec_cmd.h"
 #include "levenshtein.h"
 #include "help.h"
+#include "common-cmds.h"
 
 /* most GUI terminals set COLUMNS (although some don't export it) */
 static int term_columns(void)
@@ -298,7 +299,7 @@ static void add_cmd_list(struct cmdnames *cmds, struct cmdnames *old)
 }
 
 /* An empirically derived magic number */
-#define SIMILAR_ENOUGH(x) ((x) < 6)
+#define SIMILAR_ENOUGH(x) ((x) < 7)
 
 const char *help_unknown_cmd(const char *cmd)
 {
@@ -320,9 +321,16 @@ const char *help_unknown_cmd(const char *cmd)
 	uniq(&main_cmds);
 
 	/* This reuses cmdname->len for similarity index */
-	for (i = 0; i < main_cmds.cnt; ++i)
-		main_cmds.names[i]->len =
+	for (i = 0; i < main_cmds.cnt; ++i) {
+		main_cmds.names[i]->len = 1 +
 			levenshtein(cmd, main_cmds.names[i]->name, 0, 2, 1, 4);
+		for (n = 0; n < ARRAY_SIZE(common_cmds); ++n) {
+			if (!strcmp(main_cmds.names[i]->name,
+			    common_cmds[n].name) &&
+			    !prefixcmp(main_cmds.names[i]->name, cmd))
+				main_cmds.names[i]->len = 0;
+		}
+	}
 
 	qsort(main_cmds.names, main_cmds.cnt,
 	      sizeof(*main_cmds.names), levenshtein_compare);
@@ -330,10 +338,15 @@ const char *help_unknown_cmd(const char *cmd)
 	if (!main_cmds.cnt)
 		die ("Uh oh. Your system reports no Git commands at all.");
 
-	best_similarity = main_cmds.names[0]->len;
-	n = 1;
-	while (n < main_cmds.cnt && best_similarity == main_cmds.names[n]->len)
-		++n;
+	for (n = 0; n < main_cmds.cnt && !main_cmds.names[n]->len; ++n)
+		; /* nothing */
+	if (n < main_cmds.cnt) {
+		best_similarity = main_cmds.names[n++]->len;
+		while (n < main_cmds.cnt &&
+		       best_similarity == main_cmds.names[n]->len)
+			++n;
+	} else
+		best_similarity = 0;
 	if (autocorrect && n == 1 && SIMILAR_ENOUGH(best_similarity)) {
 		const char *assumed = main_cmds.names[0]->name;
 		main_cmds.names[0] = NULL;
