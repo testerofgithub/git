@@ -647,7 +647,11 @@ int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 				static char cwd[PATH_MAX];
 				int len;
 				if (gitdir) {
-					puts(gitdir);
+					if (is_absolute_path(gitdir) || !prefix) {
+						puts(gitdir);
+						continue;
+					}
+					puts(make_absolute_path(gitdir));
 					continue;
 				}
 				if (!prefix) {
