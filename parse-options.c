@@ -11,6 +11,13 @@ static int parse_options_usage(struct parse_opt_ctx_t *ctx,
 #define OPT_SHORT 1
 #define OPT_UNSET 2
 
+static NORETURN void optbug(const struct option *opt, const char *reason)
+{
+	if (opt->long_name)
+		die("BUG: option '%s' %s", opt->long_name, reason);
+	die("BUG: switch '%c' %s", opt->short_name, reason);
+}
+
 static int opterror(const struct option *opt, const char *reason, int flags)
 {
 	if (flags & OPT_SHORT)
@@ -316,24 +323,12 @@ static void check_typos(const char *arg, const struct option *options)
 
 static void parse_options_check(const struct option *opts)
 {
-	int err = 0;
-
 	for (; opts->type != OPTION_END; opts++) {
 		if ((opts->flags & PARSE_OPT_LASTARG_DEFAULT) &&
-		    (opts->flags & PARSE_OPT_OPTARG)) {
-			if (opts->long_name) {
-				error("`--%s` uses incompatible flags "
-				      "LASTARG_DEFAULT and OPTARG", opts->long_name);
-			} else {
-				error("`-%c` uses incompatible flags "
-				      "LASTARG_DEFAULT and OPTARG", opts->short_name);
-			}
-			err |= 1;
-		}
+		    (opts->flags & PARSE_OPT_OPTARG))
+			optbug(opts, "uses incompatible flags "
+				"LASTARG_DEFAULT and OPTARG");
 	}
-
-	if (err)
-		exit(129);
 }
 
 void parse_options_start(struct parse_opt_ctx_t *ctx,
