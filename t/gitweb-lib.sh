@@ -34,6 +34,21 @@ $0 test repository
 EOF
 }
 
+gitweb_enable_caching () {
+	test_expect_success 'enable caching' '
+		cat >>gitweb_config.perl <<-\EOF &&
+		our $caching_enabled = 1;
+		our $minCacheTime = 60*60*24*7;        # very long expiration time for tests (a week)
+		our $maxCacheTime = 60*60*24*30;       # upper bound for dynamic (adaptive) caching
+		our $cachedir = "cache";               # for testsuite to clear the right thing
+		# required, because otherwise some tests might intermittently not pass
+		our $backgroundCache = 0; # should turn off cacheWaitForUpdate() / "Generating..."
+		#our $cacheDoFork = 0;
+		EOF
+		rm -rf cache/
+	'
+}
+
 gitweb_run () {
 	GATEWAY_INTERFACE='CGI/1.1'
 	HTTP_ACCEPT='*/*'
