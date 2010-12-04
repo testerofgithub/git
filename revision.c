@@ -553,11 +553,7 @@ static void cherry_pick_list(struct commit_list *list, struct rev_info *revs)
 
 	left_first = left_count < right_count;
 	init_patch_ids(&ids);
-	if (revs->diffopt.nr_paths) {
-		ids.diffopts.nr_paths = revs->diffopt.nr_paths;
-		ids.diffopts.paths = revs->diffopt.paths;
-		ids.diffopts.pathlens = revs->diffopt.pathlens;
-	}
+	ids.diffopts.pathspec = revs->diffopt.pathspec;
 
 	/* Compute patch-ids for one side */
 	for (p = list; p; p = p->next) {
@@ -955,6 +951,7 @@ static void prepare_show_merge(struct rev_info *revs)
 	unsigned char sha1[20];
 	const char **prune = NULL;
 	int i, prune_num = 1; /* counting terminating NULL */
+	struct pathspec pathspec;
 
 	if (get_sha1("HEAD", sha1) || !(head = lookup_commit(sha1)))
 		die("--merge without HEAD?");
@@ -969,11 +966,12 @@ static void prepare_show_merge(struct rev_info *revs)
 
 	if (!active_nr)
 		read_cache();
+	init_pathspec(&pathspec, revs->prune_data);
 	for (i = 0; i < active_nr; i++) {
 		struct cache_entry *ce = active_cache[i];
 		if (!ce_stage(ce))
 			continue;
-		if (ce_path_match(ce, revs->prune_data)) {
+		if (ce_path_match(ce, &pathspec)) {
 			prune_num++;
 			prune = xrealloc(prune, sizeof(*prune) * prune_num);
 			prune[prune_num-2] = ce->name;
@@ -983,6 +981,7 @@ static void prepare_show_merge(struct rev_info *revs)
 		       ce_same_name(ce, active_cache[i+1]))
 			i++;
 	}
+	free_pathspec(&pathspec);
 	revs->prune_data = prune;
 	revs->limited = 1;
 }

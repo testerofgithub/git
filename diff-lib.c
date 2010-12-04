@@ -89,9 +89,11 @@ int run_diff_files(struct rev_info *revs, unsigned int option)
 	int silent_on_removed = option & DIFF_SILENT_ON_REMOVED;
 	unsigned ce_option = ((option & DIFF_RACY_IS_MODIFIED)
 			      ? CE_MATCH_RACY_IS_DIRTY : 0);
+	struct pathspec pathspec;
 
 	diff_set_mnemonic_prefix(&revs->diffopt, "i/", "w/");
 
+	init_pathspec(&pathspec, revs->prune_data);
 	if (diff_unmerged_stage < 0)
 		diff_unmerged_stage = 2;
 	entries = active_nr;
@@ -106,7 +108,7 @@ int run_diff_files(struct rev_info *revs, unsigned int option)
 			DIFF_OPT_TST(&revs->diffopt, HAS_CHANGES))
 			break;
 
-		if (!ce_path_match(ce, revs->prune_data))
+		if (!ce_path_match(ce, &pathspec))
 			continue;
 
 		if (ce_stage(ce)) {
@@ -218,6 +220,7 @@ int run_diff_files(struct rev_info *revs, unsigned int option)
 			    ce->name, 0, dirty_submodule);
 
 	}
+	free_pathspec(&pathspec);
 	diffcore_std(&revs->diffopt);
 	diff_flush(&revs->diffopt);
 	return 0;
@@ -417,6 +420,7 @@ static int oneway_diff(struct cache_entry **src, struct unpack_trees_options *o)
 	struct cache_entry *idx = src[0];
 	struct cache_entry *tree = src[1];
 	struct rev_info *revs = o->unpack_data;
+	struct pathspec pathspec;
 
 	/*
 	 * Unpack-trees generates a DF/conflict entry if
@@ -427,8 +431,10 @@ static int oneway_diff(struct cache_entry **src, struct unpack_trees_options *o)
 	if (tree == o->df_conflict_entry)
 		tree = NULL;
 
-	if (ce_path_match(idx ? idx : tree, revs->prune_data))
+	init_pathspec(&pathspec, revs->prune_data);
+	if (ce_path_match(idx ? idx : tree, &pathspec))
 		do_oneway_diff(o, idx, tree);
+	free_pathspec(&pathspec);
 
 	return 0;
 }
@@ -501,7 +507,7 @@ int do_diff_cache(const unsigned char *tree_sha1, struct diff_options *opt)
 	active_nr = dst - active_cache;
 
 	init_revisions(&revs, NULL);
-	revs.prune_data = opt->paths;
+	revs.prune_data = opt->pathspec.raw;
 	tree = parse_tree_indirect(tree_sha1);
 	if (!tree)
 		die("bad tree object %s", sha1_to_hex(tree_sha1));
