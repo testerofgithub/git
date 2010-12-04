@@ -176,6 +176,13 @@ messages, bug-tracking systems, email archives, and the like.
 -h::
 	Print a short usage message and exit.
 
+CONFIG
+------
+For any option '-x' you can set the config variable 'cvsimport.x' to the value
+you would specify for '-x', or to 'true' for a boolean option. For an
+uppercase option '-X' use the config variable 'cvsimport.xx' (or
+'cvsimport.XX').
+
 OUTPUT
 ------
 If '-v' is specified, the script reports what it is doing.

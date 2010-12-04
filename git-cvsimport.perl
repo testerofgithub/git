@@ -91,22 +91,24 @@ sub write_author_info($) {
 
 # convert getopts specs for use by git config
 sub read_repo_config {
-    # Split the string between characters, unless there is a ':'
-    # So "abc:de" becomes ["a", "b", "c:", "d", "e"]
+	# Split the string between characters, unless there is a ':'
+	# So "abc:de" becomes ["a", "b", "c:", "d", "e"]
 	my @opts = split(/ *(?!:)/, shift);
 	foreach my $o (@opts) {
 		my $key = $o;
 		$key =~ s/://g;
+		my $ckey = $key;
+		$ckey .= $ckey if ($key eq uc($key));
 		my $arg = 'git config';
 		$arg .= ' --bool' if ($o !~ /:$/);
 
-        chomp(my $tmp = `$arg --get cvsimport.$key`);
+		chomp(my $tmp = `$arg --get cvsimport.$ckey`);
 		if ($tmp && !($arg =~ /--bool/ && $tmp eq 'false')) {
-            no strict 'refs';
-            my $opt_name = "opt_" . $key;
-            if (!$$opt_name) {
-                $$opt_name = $tmp;
-            }
+			no strict 'refs';
+			my $opt_name = "opt_" . $key;
+			if (!$$opt_name) {
+				$$opt_name = $tmp;
+			}
 		}
 	}
 }
