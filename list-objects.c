@@ -67,6 +67,9 @@ static void process_tree(struct rev_info *revs,
 	struct tree_desc desc;
 	struct name_entry entry;
 	struct name_path me;
+	int all_interesting = (revs->diffopt.pathspec.nr == 0);
+	char *full_prefix = NULL;
+	int full_prefix_len = 0;
 
 	if (!revs->tree_objects)
 		return;
@@ -82,9 +85,28 @@ static void process_tree(struct rev_info *revs,
 	me.elem = name;
 	me.elem_len = strlen(name);
 
+	if (!all_interesting) {
+		full_prefix = path_name_impl(path, name, 1);
+		full_prefix_len = strlen(full_prefix);
+	}
+
 	init_tree_desc(&desc, tree->buffer, tree->size);
 
 	while (tree_entry(&desc, &entry)) {
+		if (!all_interesting) {
+			int showit = tree_entry_interesting(&entry,
+							    full_prefix,
+							    full_prefix_len,
+							    &revs->diffopt.pathspec);
+
+			if (showit < 0)
+				break;
+			else if (!showit)
+				continue;
+			else if (showit == 2)
+				all_interesting = 1;
+		}
+
 		if (S_ISDIR(entry.mode))
 			process_tree(revs,
 				     lookup_tree(entry.sha1),
@@ -97,6 +119,7 @@ static void process_tree(struct rev_info *revs,
 				     lookup_blob(entry.sha1),
 				     show, &me, entry.path);
 	}
+	free(full_prefix);
 	free(tree->buffer);
 	tree->buffer = NULL;
 }
