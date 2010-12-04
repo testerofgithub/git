@@ -245,6 +245,15 @@ endif::git-log[]
 	delete/add pair to be a rename if more than 90% of the file
 	hasn't changed.
 
+--detect-bulk-moves::
+	Detect bulk move of all files of a directory into a
+	different one.
+
+--hide-bulk-move-details::
+	Hide the individual files moves that make up a bulk move,
+	without hinding other changes to the involved files (contents
+	change, name change relative to the bulk move's destination).
+
 -C[<n>]::
 --detect-copies[=<n>]::
 	Detect copies as well as renames.  See also `--find-copies-harder`.

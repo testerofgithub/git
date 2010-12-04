@@ -6,14 +6,34 @@
 #include "diffcore.h"
 #include "hash.h"
 
+#define DEBUG_BULKMOVE 0
+
+#if DEBUG_BULKMOVE
+#define debug_bulkmove(args) __debug_bulkmove args
+void __debug_bulkmove(const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	fprintf(stderr, "[DBG] ");
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+}
+#else
+#define debug_bulkmove(args) do { /*nothing */ } while (0)
+#endif
+
 /* Table of rename/copy destinations */
 
 static struct diff_rename_dst {
 	struct diff_filespec *two;
 	struct diff_filepair *pair;
+	unsigned i_am_not_single:1; /* does not look for a match, only here to be looked at */
 } *rename_dst;
 static int rename_dst_nr, rename_dst_alloc;
 
+/*
+ * Do a binary search of "two" in "rename_dst", inserting it if not found.
+ */
 static struct diff_rename_dst *locate_rename_dst(struct diff_filespec *two,
 						 int insert_ok)
 {
@@ -49,7 +69,34 @@ static struct diff_rename_dst *locate_rename_dst(struct diff_filespec *two,
 	rename_dst[first].two = alloc_filespec(two->path);
 	fill_filespec(rename_dst[first].two, two->sha1, two->mode);
 	rename_dst[first].pair = NULL;
+	rename_dst[first].i_am_not_single = 0;
 	return &(rename_dst[first]);
+}
+
+/*
+ * Do a binary search in "rename_dst" of any entry under "dirname".
+ */
+static struct diff_rename_dst *locate_rename_dst_dir(const char *dirname)
+{
+	int first, last;
+	int prefixlength = strlen(dirname);
+
+	first = 0;
+	last = rename_dst_nr;
+	while (last > first) {
+		int next = (last + first) >> 1;
+		struct diff_rename_dst *dst = &(rename_dst[next]);
+		int cmp = strncmp(dirname, dst->two->path, prefixlength);
+		if (!cmp)
+			return dst;
+		if (cmp < 0) {
+			last = next;
+			continue;
+		}
+		first = next+1;
+	}
+	/* not found */
+	return NULL;
 }
 
 /* Table of rename/copy src files */
@@ -386,8 +433,11 @@ static int find_exact_renames(void)
 	for (i = 0; i < rename_src_nr; i++)
 		insert_file_table(&file_table, -1, i, rename_src[i].one);
 
-	for (i = 0; i < rename_dst_nr; i++)
+	for (i = 0; i < rename_dst_nr; i++) {
+		if (rename_dst[i].i_am_not_single)
+			continue;
 		insert_file_table(&file_table, 1, i, rename_dst[i].two);
+	}
 
 	/* Find the renames */
 	i = for_each_hash(&file_table, find_same_files);
@@ -414,6 +464,331 @@ static void record_if_better(struct diff_score m[], struct diff_score *o)
 		m[worst] = *o;
 }
 
+static struct diff_bulk_rename {
+	struct diff_filespec *one;
+	struct diff_filespec *two;
+	int discarded;
+} *bulkmove_candidates;
+static int bulkmove_candidates_nr, bulkmove_candidates_alloc;
+
+/*
+ * Do a binary search of "one" in "bulkmove_candidate", inserting it if not
+ * found.
+ * A good part was copy-pasted from locate_rename_dst().
+ */
+static struct diff_bulk_rename *locate_bulkmove_candidate(const char *one_path,
+							  const char *two_path)
+{
+	int first, last;
+
+	first = 0;
+	last = bulkmove_candidates_nr;
+	while (last > first) {
+		int next = (last + first) >> 1;
+		struct diff_bulk_rename *candidate = &(bulkmove_candidates[next]);
+		/* primary sort key on one_path, secondary on two_path */
+		int cmp = strcmp(one_path, candidate->one->path);
+		if (!cmp)
+			cmp = strcmp(two_path, candidate->two->path);
+		if (!cmp)
+			return candidate;
+		if (cmp < 0) {
+			last = next;
+			continue;
+		}
+		first = next+1;
+	}
+	/* not found */
+	/* insert to make it at "first" */
+	if (bulkmove_candidates_alloc <= bulkmove_candidates_nr) {
+		bulkmove_candidates_alloc = alloc_nr(bulkmove_candidates_alloc);
+		bulkmove_candidates = xrealloc(bulkmove_candidates,
+				      bulkmove_candidates_alloc * sizeof(*bulkmove_candidates));
+	}
+	bulkmove_candidates_nr++;
+	if (first < bulkmove_candidates_nr)
+		memmove(bulkmove_candidates + first + 1, bulkmove_candidates + first,
+			(bulkmove_candidates_nr - first - 1) * sizeof(*bulkmove_candidates));
+
+	bulkmove_candidates[first].one = alloc_filespec(one_path);
+	fill_filespec(bulkmove_candidates[first].one, null_sha1, S_IFDIR);
+	bulkmove_candidates[first].two = alloc_filespec(two_path);
+	fill_filespec(bulkmove_candidates[first].two, null_sha1, S_IFDIR);
+	bulkmove_candidates[first].discarded = 0;
+	return &(bulkmove_candidates[first]);
+}
+
+/*
+ * Marks as such file_rename if it is made uninteresting by dir_rename.
+ * Returns -1 if the file_rename is outside of the range in which given
+ * renames concerned by dir_rename are to be found (ie. end of loop),
+ * 0 otherwise.
+ */
+static int maybe_mark_uninteresting(struct diff_rename_dst *file_rename,
+				    struct diff_bulk_rename *dir_rename,
+				    int one_len, int two_len)
+{
+	if (!file_rename->pair) /* file add */
+		return 0;
+	if (strncmp(file_rename->two->path,
+		    dir_rename->two->path, two_len))
+		return -1;
+	if (strncmp(file_rename->pair->one->path,
+		    dir_rename->one->path, one_len) ||
+	    !basename_same(file_rename->pair->one, file_rename->two) ||
+	    file_rename->pair->score != MAX_SCORE)
+		return 0;
+
+	file_rename->pair->uninteresting_rename = 1;
+	debug_bulkmove(("%s* -> %s* makes %s -> %s uninteresting\n",
+			dir_rename->one->path, dir_rename->two->path,
+			file_rename->pair->one->path, file_rename->two->path));
+	return 0;
+}
+
+/*
+ * Copy dirname of src into dst, suitable to append a filename without
+ * an additional "/".
+ * Only handles relative paths since there is no absolute path in a git repo.
+ * Writes "" when there is no "/" in src.
+ * May overwrite more chars than really needed, if src ends with a "/".
+ * Supports in-place modification of src by passing dst == src.
+ */
+static const char *copy_dirname(char *dst, const char *src)
+{
+	size_t len = strlen(src);
+	const char *slash;
+	char *end;
+
+	if (len > 0 && src[len - 1] == '/')
+		/* Trailing slash.  Ignore it. */
+		len--;
+
+	slash = memrchr(src, '/', len);
+	if (!slash) {
+		*dst = '\0';
+		return dst;
+	}
+
+	end = mempcpy(dst, src, slash - src + 1);
+	*end = '\0';
+	return dst;
+}
+
+// FIXME: leaks like hell.
+/* See if the fact that one_leftover exists under one_parent_path in
+ * dst tree should disqualify one_parent_path from bulkmove eligibility.
+ * Return 1 if it disqualifies, 0 if it is OK.
+ */
+static int dispatched_to_different_dirs(const char *one_parent_path)
+{
+	/* this might be a dir split, or files added
+	 * after the bulk move, or just an isolated
+	 * rename */
+	int two_idx, j, onep_len, maybe_dir_rename;
+	struct diff_rename_dst *one_leftover =
+		one_leftover = locate_rename_dst_dir(one_parent_path);
+
+	if (!one_leftover)
+		return 0;
+
+	/* try to see if it is a file added after the bulk move */
+	two_idx = one_leftover - rename_dst;
+	onep_len = strlen(one_parent_path);
+	maybe_dir_rename = 1;
+
+	/* check no leftover file was already here before */
+	for (j = two_idx; j < rename_dst_nr; j++) {
+		if (strncmp(rename_dst[j].two->path,
+			    one_parent_path, onep_len))
+			break; /* exhausted directory in this direction */
+		debug_bulkmove(("leftover file %s in %s\n",
+				rename_dst[j].two->path, one_parent_path));
+		if (rename_dst[j].i_am_not_single || /* those were already here */
+		    (rename_dst[j].pair &&
+		     !strncmp(rename_dst[j].pair->one->path,
+			      one_parent_path, onep_len) && /* renamed from here */
+		     strncmp(rename_dst[j].two->path,
+			     one_parent_path, onep_len))) { /* not to a subdir */
+			maybe_dir_rename = 0;
+			debug_bulkmove(("... tells not a bulk move\n"));
+			break;
+		}
+		debug_bulkmove(("... not believed to prevent bulk move\n"));
+	}
+	if (!maybe_dir_rename)
+		return 1;
+	/* try the other direction (dup code) */
+	for (j = two_idx-1; j >= 0; j--) {
+		if (strncmp(rename_dst[j].two->path,
+			    one_parent_path, onep_len))
+			break; /* exhausted directory in this direction */
+		debug_bulkmove(("leftover file %s in '%s'\n",
+				rename_dst[j].two->path, one_parent_path));
+		if (rename_dst[j].i_am_not_single || /* those were already here */
+		    (rename_dst[j].pair &&
+		     !strncmp(rename_dst[j].pair->one->path,
+			      one_parent_path, onep_len) && /* renamed from here */
+		     strncmp(rename_dst[j].two->path,
+			     one_parent_path, onep_len))) { /* not to a subdir */
+			maybe_dir_rename = 0;
+			debug_bulkmove(("... tells not a bulk move\n"));
+			break;
+		}
+		debug_bulkmove(("... not believed to prevent bulk move\n"));
+	}
+	if (!maybe_dir_rename)
+		return 1;
+
+	/* Here we are in the case where a directory
+	 * content was completely moved, but files
+	 * were added to it afterwards.  Proceed as
+	 * for a simple bulk move. */
+	return 0;
+}
+
+/*
+ * Assumes candidate->one is a subdir of seen->one, mark 'seen' as
+ * discarded if candidate->two is outside seen->two.  Also mark
+ * 'candidate' itself as discarded if the conflict implies so.
+ *
+ * Return 1 if 'seen' was discarded
+ */
+static int discard_if_outside(struct diff_bulk_rename *candidate,
+			 struct diff_bulk_rename *seen) {
+	if (!prefixcmp(candidate->two->path, seen->two->path)) {
+		debug_bulkmove((" 'dstpair' conforts 'seen'\n"));
+		return 0;
+	} else {
+		debug_bulkmove(("discarding %s -> %s from bulk moves (split into %s and %s)\n",
+				seen->one->path, seen->two->path,
+				candidate->two->path, seen->two->path));
+		seen->discarded = 1;
+		/* Need to discard dstpair as well, unless moving from
+		 * a strict subdir of seen->one or to a strict subdir
+		 * of seen->two */
+		if (!strcmp(seen->one->path, candidate->one->path) &&
+		    prefixcmp(seen->two->path, candidate->two->path)) {
+			debug_bulkmove(("... and not adding self\n"));
+			candidate->discarded = 1;
+		}
+		return 1;
+	}
+}
+
+/*
+ * Check if the rename specified by "dstpair" could cause a
+ * bulk move to be detected, record it in bulkmove_candidates if yes.
+ */
+static void check_one_bulk_move(struct diff_filepair *dstpair)
+{
+	char one_parent_path[PATH_MAX], two_parent_path[PATH_MAX];
+
+	/* genuine new files (or believed to be so) */
+	if (!dstpair)
+		return;
+	/* dummy renames used by copy detection */
+	if (!strcmp(dstpair->one->path, dstpair->two->path))
+		return;
+
+	copy_dirname(one_parent_path, dstpair->one->path);
+	copy_dirname(two_parent_path, dstpair->two->path);
+
+	/* simple rename with no directory change */
+	if (!strcmp(one_parent_path, two_parent_path))
+		return;
+
+	debug_bulkmove(("[] %s -> %s ?\n", dstpair->one->path, dstpair->two->path));
+
+	/* loop up one_parent_path over successive parents */
+	// FIXME: also loop over two_parent_path prefixes
+	do {
+		struct diff_bulk_rename *seen;
+		int old_nr = bulkmove_candidates_nr;
+		struct diff_bulk_rename *candidate =
+			locate_bulkmove_candidate(one_parent_path, two_parent_path);
+		debug_bulkmove(("[[]] %s ...\n", one_parent_path));
+		if (old_nr == bulkmove_candidates_nr) {
+			debug_bulkmove((" already seen\n"));
+			return;
+		}
+
+		/* After this commit, are there any files still under one_parent_path ?
+		 * Any file left would disqualifies this dir for bulk move.
+		 */
+		if (dispatched_to_different_dirs(one_parent_path)) {
+			// FIXME: check overlap with discard_if_outside()
+			candidate->discarded = 1;
+			return;
+		}
+
+		/* walk up for one_parent_path prefixes */
+		for (seen = candidate-1; (seen >= bulkmove_candidates) &&
+			     !prefixcmp(one_parent_path, seen->one->path); seen--) {
+			debug_bulkmove((" ? %s -> %s\n", seen->one->path, seen->two->path));
+			/* subdir of "seen" dest dir ? */
+			if (discard_if_outside(candidate, seen))
+				continue;
+		}
+		/* look down for other moves from one_parent_path */
+		seen = candidate + 1;
+		if (seen != bulkmove_candidates + bulkmove_candidates_nr &&
+		    !strcmp(one_parent_path, seen->one->path)) {
+			debug_bulkmove((" ? %s -> %s (2)\n", seen->one->path, seen->two->path));
+			/* subdir of "seen" dest dir ? */
+			if (discard_if_outside(candidate, seen))
+				continue;
+		}
+
+		/* next parent if any */
+		copy_dirname(one_parent_path, one_parent_path);
+	} while (*one_parent_path);
+}
+
+/*
+ * Take all file renames recorded so far and check if they could cause
+ * a bulk move to be detected.
+ */
+static void diffcore_bulk_moves(int opt_hide_renames)
+{
+	int i;
+	for (i = 0; i < rename_dst_nr; i++)
+		check_one_bulk_move(rename_dst[i].pair);
+
+	if (opt_hide_renames) {
+		/* flag as "uninteresting" those candidates hidden by dir move */
+		struct diff_bulk_rename *candidate;
+		for (candidate = bulkmove_candidates;
+		     candidate < bulkmove_candidates + bulkmove_candidates_nr;
+		     candidate++) {
+			int two_idx, i, one_len, two_len;
+			struct diff_rename_dst *two_sample;
+			if (candidate->discarded)
+				continue;
+
+			/* bisect to any entry within candidate dst dir */
+			two_sample = locate_rename_dst_dir(candidate->two->path);
+			if (!two_sample) {
+				die("PANIC: %s candidate of rename not in target tree (from %s)\n",
+				    candidate->two->path, candidate->one->path);
+			}
+			two_idx = two_sample - rename_dst;
+
+			/* now remove extraneous 100% files inside. */
+			one_len = strlen(candidate->one->path);
+			two_len = strlen(candidate->two->path);
+			for (i = two_idx; i < rename_dst_nr; i++)
+				if (maybe_mark_uninteresting(rename_dst+i, candidate,
+							     one_len, two_len) < 0)
+					break;
+			for (i = two_idx-1; i >= 0; i--)
+				if (maybe_mark_uninteresting(rename_dst+i, candidate,
+							     one_len, two_len) < 0)
+					break;
+		}
+	}
+}
+
 void diffcore_rename(struct diff_options *options)
 {
 	int detect_rename = options->detect_rename;
@@ -424,6 +799,7 @@ void diffcore_rename(struct diff_options *options)
 	struct diff_score *mx;
 	int i, j, rename_count;
 	int num_create, num_src, dst_cnt;
+	struct diff_bulk_rename *candidate;
 
 	if (!minimum_score)
 		minimum_score = DEFAULT_RENAME_SCORE;
@@ -438,8 +814,7 @@ void diffcore_rename(struct diff_options *options)
 				continue; /* not interested */
 			else
 				locate_rename_dst(p->two, 1);
-		}
-		else if (!DIFF_FILE_VALID(p->two)) {
+		} else if (!DIFF_FILE_VALID(p->two)) {
 			/*
 			 * If the source is a broken "delete", and
 			 * they did not really want to get broken,
@@ -450,14 +825,23 @@ void diffcore_rename(struct diff_options *options)
 			if (p->broken_pair && !p->score)
 				p->one->rename_used++;
 			register_rename_src(p->one, p->score);
-		}
-		else if (detect_rename == DIFF_DETECT_COPY) {
-			/*
-			 * Increment the "rename_used" score by
-			 * one, to indicate ourselves as a user.
-			 */
-			p->one->rename_used++;
-			register_rename_src(p->one, p->score);
+		} else {
+			if (detect_rename == DIFF_DETECT_COPY) {
+				/*
+				 * Increment the "rename_used" score by
+				 * one, to indicate ourselves as a user.
+				 */
+				p->one->rename_used++;
+				register_rename_src(p->one, p->score);
+			}
+			if (DIFF_OPT_TST(options, DETECT_BULK_MOVES)) {
+				/* similarly, bulk move detection needs to
+				 * see all files from second tree, but we don't
+				 * want them to be matched against single sources.
+				 */
+				// FIXME: check interaction with --find-copies-harder
+				locate_rename_dst(p->two, 1)->i_am_not_single = 1;
+			}
 		}
 	}
 	if (rename_dst_nr == 0 || rename_src_nr == 0)
@@ -509,6 +893,8 @@ void diffcore_rename(struct diff_options *options)
 
 		if (rename_dst[i].pair)
 			continue; /* dealt with exact match already. */
+		if (rename_dst[i].i_am_not_single)
+			continue; /* not looking for a match. */
 
 		m = &mx[dst_cnt * NUM_CANDIDATE_PER_DST];
 		for (j = 0; j < NUM_CANDIDATE_PER_DST; j++)
@@ -569,7 +955,30 @@ void diffcore_rename(struct diff_options *options)
 	/* At this point, we have found some renames and copies and they
 	 * are recorded in rename_dst.  The original list is still in *q.
 	 */
+
+	/* Now possibly factorize those renames and copies. */
+	if (DIFF_OPT_TST(options, DETECT_BULK_MOVES))
+		diffcore_bulk_moves(DIFF_OPT_TST(options, HIDE_DIR_RENAME_DETAILS));
+
 	DIFF_QUEUE_CLEAR(&outq);
+
+	/* Now turn non-discarded bulkmove_candidates into real renames */
+	for (candidate = bulkmove_candidates;
+	     candidate < bulkmove_candidates + bulkmove_candidates_nr; candidate++) {
+		struct diff_filepair* pair;
+		if (candidate->discarded)
+			continue;
+		/* visualize toplevel dir if needed */
+		if (!*candidate->one->path)
+			candidate->one->path = "./";
+		if (!*candidate->two->path)
+			candidate->two->path = "./";
+		pair = diff_queue(&outq, candidate->one, candidate->two);
+		pair->score = MAX_SCORE;
+		pair->renamed_pair = 1;
+		pair->is_bulkmove = 1;
+	}
+
 	for (i = 0; i < q->nr; i++) {
 		struct diff_filepair *p = q->queue[i];
 		struct diff_filepair *pair_to_free = NULL;
@@ -584,7 +993,8 @@ void diffcore_rename(struct diff_options *options)
 			struct diff_rename_dst *dst =
 				locate_rename_dst(p->two, 0);
 			if (dst && dst->pair) {
-				diff_q(&outq, dst->pair);
+				if (!dst->pair->uninteresting_rename)
+					diff_q(&outq, dst->pair);
 				pair_to_free = p;
 			}
 			else

@@ -71,6 +71,25 @@ separate lines indicate the old and the new mode.
       rename to a
 
 
+bulk move entries
+-----------------
+
+When a bulk move is detected, a special block is output in addition to
+the renames that constitute the bulk move, looking like this:
+
+       diff --git-detect-bulk-moves a/dir1/ b/dir2/
+
+It is essentially similar to the standard diff header, with a special
+syntax showing we are describing a difference between two directories,
+and not a change to be applied as-is to a file.
+
+It is followed by three specific extended header lines:
+
+       bulk move with similarity index <number>
+       bulk move from <dir1>/
+       bulk move to <dir2>/
+
+
 combined diff format
 --------------------
 
